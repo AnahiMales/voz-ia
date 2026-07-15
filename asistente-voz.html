@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Asistente de voz — Métricas</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #2a2f3a;
+    --text: #e8eaed;
+    --muted: #8a8f9a;
+    --accent: #ff6a3d;
+    --accent-dim: #ff6a3d33;
+    --ok: #3ddc84;
+    --listening: #ff453a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    width: 100%;
+    max-width: 520px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px;
+  }
+  h1 {
+    font-size: 18px;
+    margin: 0 0 4px;
+    font-weight: 600;
+  }
+  .sub {
+    color: var(--muted);
+    font-size: 13px;
+    margin-bottom: 22px;
+  }
+  label {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 6px;
+    margin-top: 16px;
+  }
+  input[type="text"] {
+    width: 100%;
+    background: #10131a;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: var(--text);
+    font-size: 13px;
+    font-family: monospace;
+  }
+  .orb-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 28px 0 18px;
+  }
+  .orb {
+    width: 110px;
+    height: 110px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #2a2f3a, #10131a);
+    border: 2px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.25s ease;
+    cursor: pointer;
+  }
+  .orb.listening {
+    border-color: var(--listening);
+    box-shadow: 0 0 0 0 rgba(255,69,58,0.5);
+    animation: pulse 1.4s infinite;
+  }
+  .orb.active {
+    border-color: var(--ok);
+    background: radial-gradient(circle at 35% 30%, #1a3a2a, #10131a);
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(255,69,58,0.45); }
+    70% { box-shadow: 0 0 0 22px rgba(255,69,58,0); }
+    100% { box-shadow: 0 0 0 0 rgba(255,69,58,0); }
+  }
+  .orb svg { width: 40px; height: 40px; }
+  .status {
+    text-align: center;
+    font-size: 13px;
+    color: var(--muted);
+    min-height: 18px;
+  }
+  .status.hot { color: var(--accent); font-weight: 600; }
+  .btn-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+  }
+  button {
+    flex: 1;
+    background: var(--accent);
+    color: #1a0f0a;
+    border: none;
+    border-radius: 10px;
+    padding: 12px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .transcript-box {
+    margin-top: 20px;
+    background: #10131a;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    font-size: 13px;
+    min-height: 60px;
+  }
+  .transcript-box .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
+  .transcript-box .you { color: var(--text); margin-bottom: 8px; }
+  .transcript-box .reply { color: var(--ok); }
+  .log {
+    margin-top: 12px;
+    font-size: 11px;
+    color: var(--muted);
+    max-height: 90px;
+    overflow-y: auto;
+    font-family: monospace;
+    white-space: pre-wrap;
+  }
+  .warn {
+    background: #3a2a10;
+    border: 1px solid #6b4a1a;
+    color: #f0c27b;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 12px;
+    margin-top: 16px;
+    display: none;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>🎙️ Asistente de métricas</h1>
+    <div class="sub">Di "hola ayudante" seguido de tu pregunta.</div>
+
+    <label>URL del Webhook (n8n)</label>
+    <input type="text" id="webhookUrl" placeholder="https://tu-instancia.app.n8n.cloud/webhook-test/..." value="https://ingsamm.app.n8n.cloud/webhook-test/a8f210b6-a771-4340-903d-e43ab360d144">
+
+    <div class="orb-wrap">
+      <div class="orb" id="orb" title="Click para activar/desactivar escucha">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#e8eaed" stroke-width="1.6">
+          <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
+          <line x1="12" y1="19" x2="12" y2="22"/>
+        </svg>
+      </div>
+      <div class="status" id="status">Presiona el micrófono para empezar</div>
+    </div>
+
+    <div class="btn-row">
+      <button id="toggleBtn">Activar escucha</button>
+      <button id="testBtn" class="secondary">Probar sin voz</button>
+    </div>
+
+    <div class="warn" id="warnBox">
+      Tu navegador no soporta reconocimiento de voz continuo (usa Chrome de escritorio o Android).
+    </div>
+
+    <div class="transcript-box">
+      <div class="label">Última interacción</div>
+      <div class="you" id="youText">—</div>
+      <div class="reply" id="replyText"></div>
+    </div>
+
+    <div class="log" id="logBox"></div>
+  </div>
+
+<script>
+const WAKE_WORD = "hola ayudante";
+const orb = document.getElementById('orb');
+const statusEl = document.getElementById('status');
+const toggleBtn = document.getElementById('toggleBtn');
+const testBtn = document.getElementById('testBtn');
+const warnBox = document.getElementById('warnBox');
+const youText = document.getElementById('youText');
+const replyText = document.getElementById('replyText');
+const logBox = document.getElementById('logBox');
+const webhookInput = document.getElementById('webhookUrl');
+
+let recognition = null;
+let listening = false;
+let awake = false;
+let awakeTimer = null;
+
+function log(msg) {
+  const t = new Date().toLocaleTimeString();
+  logBox.textContent = `[${t}] ${msg}\n` + logBox.textContent;
+}
+
+function setStatus(text, hot = false) {
+  statusEl.textContent = text;
+  statusEl.className = 'status' + (hot ? ' hot' : '');
+}
+
+const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+if (!SpeechRecognitionAPI) {
+  warnBox.style.display = 'block';
+  toggleBtn.disabled = true;
+} else {
+  recognition = new SpeechRecognitionAPI();
+  recognition.lang = 'es-ES';
+  recognition.continuous = true;
+  recognition.interimResults = true;
+
+  recognition.onresult = (event) => {
+    let finalText = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      if (event.results[i].isFinal) {
+        finalText += event.results[i][0].transcript;
+      }
+    }
+    if (!finalText) return;
+
+    const normalized = finalText.toLowerCase().trim();
+    log(`Escuchado: "${normalized}"`);
+
+    if (!awake) {
+      if (normalized.includes(WAKE_WORD)) {
+        awake = true;
+        orb.classList.add('active');
+        setStatus('Te escucho...', true);
+        log('Wake word detectada. Esperando comando.');
+        // Si ya viene el comando en la misma frase, úsalo directo
+        const idx = normalized.indexOf(WAKE_WORD);
+        const rest = normalized.slice(idx + WAKE_WORD.length).replace(/^[,\s]+/, '');
+        if (rest.length > 3) {
+          handleCommand(rest);
+        } else {
+          clearTimeout(awakeTimer);
+          awakeTimer = setTimeout(() => resetAwake(), 8000);
+        }
+      }
+    } else {
+      clearTimeout(awakeTimer);
+      handleCommand(normalized);
+    }
+  };
+
+  recognition.onerror = (e) => {
+    log('Error de reconocimiento: ' + e.error);
+    if (e.error === 'not-allowed') {
+      setStatus('Permiso de micrófono denegado');
+      stopListening();
+    }
+  };
+
+  recognition.onend = () => {
+    if (listening) {
+      // Reinicia automáticamente (el navegador corta la sesión periódicamente)
+      recognition.start();
+    }
+  };
+}
+
+function resetAwake() {
+  awake = false;
+  orb.classList.remove('active');
+  setStatus(listening ? 'Esperando "hola ayudante"...' : 'Detenido');
+}
+
+function handleCommand(text) {
+  setStatus('Procesando...', true);
+  youText.textContent = text;
+  replyText.textContent = '';
+  sendToWebhook(text);
+  resetAwake();
+}
+
+async function sendToWebhook(comando) {
+  const url = webhookInput.value.trim();
+  if (!url) {
+    log('Falta la URL del webhook.');
+    setStatus('Falta configurar la URL del webhook');
+    return;
+  }
+  try {
+    log('Enviando a n8n: ' + comando);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comando })
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    log('Respuesta recibida: ' + JSON.stringify(data));
+
+    const spoken = data.respuesta || data.texto || data.output || JSON.stringify(data);
+    replyText.textContent = spoken;
+    speak(spoken);
+    setStatus(listening ? 'Esperando "hola ayudante"...' : 'Listo');
+  } catch (err) {
+    log('Error al llamar al webhook: ' + err.message);
+    setStatus('Error al conectar con n8n');
+    replyText.textContent = '⚠️ ' + err.message;
+  }
+}
+
+function speak(text) {
+  if (!('speechSynthesis' in window)) return;
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = 'es-ES';
+  speechSynthesis.speak(utter);
+}
+
+function startListening() {
+  if (!recognition) return;
+  listening = true;
+  recognition.start();
+  orb.classList.add('listening');
+  setStatus('Esperando "hola ayudante"...');
+  toggleBtn.textContent = 'Detener escucha';
+  log('Escucha iniciada.');
+}
+
+function stopListening() {
+  if (!recognition) return;
+  listening = false;
+  recognition.stop();
+  orb.classList.remove('listening', 'active');
+  setStatus('Detenido');
+  toggleBtn.textContent = 'Activar escucha';
+  log('Escucha detenida.');
+}
+
+toggleBtn.addEventListener('click', () => {
+  if (listening) stopListening(); else startListening();
+});
+
+orb.addEventListener('click', () => {
+  if (listening) stopListening(); else startListening();
+});
+
+testBtn.addEventListener('click', () => {
+  const texto = prompt('Escribe el comando a probar (sin necesidad de hablar):', 'dame las métricas de hoy');
+  if (texto) handleCommand(texto.toLowerCase());
+});
+</script>
+</body>
+</html>
