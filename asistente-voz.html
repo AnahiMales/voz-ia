@@ -210,6 +210,8 @@ let recognition = null;
 let listening = false;
 let awake = false;
 let awakeTimer = null;
+let isSpeaking = false;   // true mientras el asistente reproduce audio
+let isProcessing = false; // true mientras hay una solicitud al webhook en curso
 
 function log(msg) {
   const t = new Date().toLocaleTimeString();
@@ -233,6 +235,9 @@ if (!SpeechRecognitionAPI) {
   recognition.interimResults = true;
 
   recognition.onresult = (event) => {
+    // Ignorar resultados mientras el asistente habla o ya está procesando un comando
+    if (isSpeaking || isProcessing) return;
+
     let finalText = '';
     for (let i = event.resultIndex; i < event.results.length; i++) {
       if (event.results[i].isFinal) {
@@ -250,7 +255,6 @@ if (!SpeechRecognitionAPI) {
         orb.classList.add('active');
         setStatus('Te escucho...', true);
         log('Wake word detectada. Esperando comando.');
-        // Si ya viene el comando en la misma frase, úsalo directo
         const idx = normalized.indexOf(WAKE_WORD);
         const rest = normalized.slice(idx + WAKE_WORD.length).replace(/^[,\s]+/, '');
         if (rest.length > 3) {
@@ -275,8 +279,8 @@ if (!SpeechRecognitionAPI) {
   };
 
   recognition.onend = () => {
-    if (listening) {
-      // Reinicia automáticamente (el navegador corta la sesión periódicamente)
+    // Solo reinicia si seguimos escuchando y no estamos hablando/procesando
+    if (listening && !isSpeaking && !isProcessing) {
       recognition.start();
     }
   };
@@ -285,15 +289,27 @@ if (!SpeechRecognitionAPI) {
 function resetAwake() {
   awake = false;
   orb.classList.remove('active');
-  setStatus(listening ? 'Esperando "hola ayudante"...' : 'Detenido');
+  if (!isSpeaking && !isProcessing) {
+    setStatus(listening ? 'Esperando "hola ayudante"...' : 'Detenido');
+  }
 }
 
 function handleCommand(text) {
+  if (isProcessing) return; // evita procesar el mismo comando dos veces
+  isProcessing = true;
+
   setStatus('Procesando...', true);
   youText.textContent = text;
   replyText.textContent = '';
-  sendToWebhook(text);
-  resetAwake();
+
+  if (recognition && listening) {
+    recognition.stop();
+  }
+
+  sendToWebhook(text).finally(() => {
+    isProcessing = false;
+    resetAwake();
+  });
 }
 
 async function sendToWebhook(comando) {
@@ -301,6 +317,7 @@ async function sendToWebhook(comando) {
   if (!url) {
     log('Falta la URL del webhook.');
     setStatus('Falta configurar la URL del webhook');
+    if (listening && recognition) recognition.start();
     return;
   }
   try {
@@ -310,25 +327,70 @@ async function sendToWebhook(comando) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ comando })
     });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
+
+    // Leemos como texto primero para evitar el error de JSON vacío/inválido
+    const raw = await res.text();
+    if (!res.ok) throw new Error('HTTP ' + res.status + (raw ? ': ' + raw : ''));
+
+    let data;
+    if (!raw || !raw.trim()) {
+      log('El webhook respondió sin contenido.');
+      data = {};
+    } else {
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        log('Respuesta no era JSON válido: ' + raw);
+        data = { respuesta: raw };
+      }
+    }
+
     log('Respuesta recibida: ' + JSON.stringify(data));
 
-    const spoken = data.respuesta || data.texto || data.output || JSON.stringify(data);
+    const spoken = data.respuesta || data.texto || data.output || 'No recibí una respuesta clara.';
     replyText.textContent = spoken;
     speak(spoken);
-    setStatus(listening ? 'Esperando "hola ayudante"...' : 'Listo');
   } catch (err) {
     log('Error al llamar al webhook: ' + err.message);
     setStatus('Error al conectar con n8n');
     replyText.textContent = '⚠️ ' + err.message;
+    if (listening && recognition) {
+      recognition.start();
+    }
   }
 }
 
 function speak(text) {
-  if (!('speechSynthesis' in window)) return;
+  if (!('speechSynthesis' in window)) {
+    if (listening && recognition) recognition.start();
+    setStatus(listening ? 'Esperando "hola ayudante"...' : 'Listo');
+    return;
+  }
+
+  isSpeaking = true;
+  orb.classList.add('speaking');
+  setStatus('Respondiendo...', true);
+
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = 'es-ES';
+
+  utter.onend = () => {
+    isSpeaking = false;
+    orb.classList.remove('speaking');
+    if (listening && recognition) {
+      recognition.start();
+    }
+    setStatus(listening ? 'Esperando "hola ayudante"...' : 'Listo');
+  };
+
+  utter.onerror = () => {
+    isSpeaking = false;
+    orb.classList.remove('speaking');
+    if (listening && recognition) {
+      recognition.start();
+    }
+  };
+
   speechSynthesis.speak(utter);
 }
 
@@ -346,7 +408,7 @@ function stopListening() {
   if (!recognition) return;
   listening = false;
   recognition.stop();
-  orb.classList.remove('listening', 'active');
+  orb.classList.remove('listening', 'active', 'speaking');
   setStatus('Detenido');
   toggleBtn.textContent = 'Activar escucha';
   log('Escucha detenida.');
