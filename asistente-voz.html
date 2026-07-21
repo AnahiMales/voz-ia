@@ -168,7 +168,8 @@
 
 <script>
 const WAKE_WORD = "hola ayudante";
-const COMMAND_TIMEOUT_MS = 10000; // tiempo máximo esperando el comando tras la wake word
+const COMMAND_TIMEOUT_MS = 12000;  // tiempo máximo total esperando que empieces a hablar
+const SILENCE_MS = 1800;           // pausa que indica que terminaste de decir el comando
 
 const orb = document.getElementById('orb');
 const statusEl = document.getElementById('status');
@@ -185,10 +186,10 @@ let listening = false;
 let isSpeaking = false;
 let isProcessing = false;
 
-// mode: 'wake'    -> esperando la wake word
-//       'command' -> ya se detectó la wake word, esperando el comando en buffer limpio
-let mode = 'wake';
-let commandTimer = null;
+let mode = 'wake'; // 'wake' | 'command'
+let commandTimer = null;   // timeout total esperando que arranques a hablar
+let silenceTimer = null;   // timeout de silencio para saber que terminaste la frase
+let commandBuffer = '';    // acumula los fragmentos de voz del comando
 
 function log(msg) {
   const t = new Date().toLocaleTimeString();
@@ -223,7 +224,7 @@ if (!SpeechRecognitionAPI) {
     if (!finalText) return;
 
     const normalized = finalText.toLowerCase().trim();
-    if (normalized.length < 3) return;
+    if (normalized.length < 2) return;
 
     log(`Escuchado: "${normalized}"`);
 
@@ -233,16 +234,15 @@ if (!SpeechRecognitionAPI) {
         const rest = normalized.slice(idx + WAKE_WORD.length).replace(/^[,\s]+/, '');
 
         if (rest.length > 3) {
-          // El comando vino en la misma frase, se procesa directo
-          handleCommand(rest);
+          enterCommandMode();
+          appendToCommand(rest);
         } else {
-          // Solo se dijo la wake word: pasamos a modo comando con buffer limpio
           enterCommandMode();
         }
       }
     } else if (mode === 'command') {
       clearTimeout(commandTimer);
-      handleCommand(normalized);
+      appendToCommand(normalized);
     }
   };
 
@@ -262,15 +262,15 @@ if (!SpeechRecognitionAPI) {
 }
 
 function enterCommandMode() {
+  if (mode === 'command') return; // ya estamos en modo comando, no reiniciar de nuevo
   mode = 'command';
+  commandBuffer = '';
   orb.classList.add('active');
   setStatus('Te escucho...', true);
   log('Wake word detectada. Reiniciando escucha para captar el comando.');
 
-  // Reinicio explícito: limpia el buffer de resultados para que lo próximo
-  // que se escuche se trate como el comando completo, sin residuos previos.
   if (recognition) {
-    recognition.stop(); // onend reiniciará automáticamente (mode ya es 'command')
+    recognition.stop(); // onend reinicia con buffer limpio
   }
 
   clearTimeout(commandTimer);
@@ -280,8 +280,24 @@ function enterCommandMode() {
   }, COMMAND_TIMEOUT_MS);
 }
 
+function appendToCommand(text) {
+  commandBuffer = (commandBuffer + ' ' + text).trim();
+  setStatus('Escuchando: "' + commandBuffer + '"', true);
+
+  // Cada vez que llega un fragmento nuevo, reiniciamos el temporizador de silencio.
+  // Solo enviamos el comando completo cuando pasa SILENCE_MS sin nada nuevo.
+  clearTimeout(silenceTimer);
+  silenceTimer = setTimeout(() => {
+    if (commandBuffer) {
+      handleCommand(commandBuffer);
+    }
+  }, SILENCE_MS);
+}
+
 function resetToWake() {
   mode = 'wake';
+  commandBuffer = '';
+  clearTimeout(silenceTimer);
   orb.classList.remove('active');
   if (!isSpeaking && !isProcessing) {
     setStatus(listening ? 'Esperando "hola ayudante"...' : 'Detenido');
@@ -292,6 +308,8 @@ function handleCommand(text) {
   if (isProcessing) return;
   isProcessing = true;
   clearTimeout(commandTimer);
+  clearTimeout(silenceTimer);
+  commandBuffer = '';
 
   setStatus('Procesando...', true);
   youText.textContent = text;
@@ -392,6 +410,7 @@ function startListening() {
   if (!recognition) return;
   listening = true;
   mode = 'wake';
+  commandBuffer = '';
   recognition.start();
   orb.classList.add('listening');
   setStatus('Esperando "hola ayudante"...');
@@ -403,7 +422,9 @@ function stopListening() {
   if (!recognition) return;
   listening = false;
   mode = 'wake';
+  commandBuffer = '';
   clearTimeout(commandTimer);
+  clearTimeout(silenceTimer);
   recognition.stop();
   orb.classList.remove('listening', 'active', 'speaking');
   setStatus('Detenido');
