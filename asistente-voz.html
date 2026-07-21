@@ -210,7 +210,6 @@ let recognition = null;
 let listening = false;
 let awake = false;
 let awakeTimer = null;
-let isSpeaking = false; // true mientras el asistente reproduce audio (evita que se escuche a sí mismo)
 
 function log(msg) {
   const t = new Date().toLocaleTimeString();
@@ -234,8 +233,6 @@ if (!SpeechRecognitionAPI) {
   recognition.interimResults = true;
 
   recognition.onresult = (event) => {
-    if (isSpeaking) return; // ignorar todo mientras el asistente está hablando
-
     let finalText = '';
     for (let i = event.resultIndex; i < event.results.length; i++) {
       if (event.results[i].isFinal) {
@@ -278,7 +275,7 @@ if (!SpeechRecognitionAPI) {
   };
 
   recognition.onend = () => {
-    if (listening && !isSpeaking) {
+    if (listening) {
       // Reinicia automáticamente (el navegador corta la sesión periódicamente)
       recognition.start();
     }
@@ -288,9 +285,7 @@ if (!SpeechRecognitionAPI) {
 function resetAwake() {
   awake = false;
   orb.classList.remove('active');
-  if (!isSpeaking) {
-    setStatus(listening ? 'Esperando "hola ayudante"...' : 'Detenido');
-  }
+  setStatus(listening ? 'Esperando "hola ayudante"...' : 'Detenido');
 }
 
 function handleCommand(text) {
@@ -315,29 +310,14 @@ async function sendToWebhook(comando) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ comando })
     });
-
-    // Leemos como texto primero para evitar el error de JSON vacío/inválido
-    const raw = await res.text();
-    if (!res.ok) throw new Error('HTTP ' + res.status + (raw ? ': ' + raw : ''));
-
-    let data;
-    if (!raw || !raw.trim()) {
-      log('El webhook respondió sin contenido.');
-      data = {};
-    } else {
-      try {
-        data = JSON.parse(raw);
-      } catch {
-        log('Respuesta no era JSON válido: ' + raw);
-        data = { respuesta: raw };
-      }
-    }
-
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
     log('Respuesta recibida: ' + JSON.stringify(data));
 
-    const spoken = data.respuesta || data.texto || data.output || 'No recibí una respuesta clara.';
+    const spoken = data.respuesta || data.texto || data.output || JSON.stringify(data);
     replyText.textContent = spoken;
     speak(spoken);
+    setStatus(listening ? 'Esperando "hola ayudante"...' : 'Listo');
   } catch (err) {
     log('Error al llamar al webhook: ' + err.message);
     setStatus('Error al conectar con n8n');
@@ -346,27 +326,9 @@ async function sendToWebhook(comando) {
 }
 
 function speak(text) {
-  if (!('speechSynthesis' in window)) {
-    setStatus(listening ? 'Esperando "hola ayudante"...' : 'Listo');
-    return;
-  }
-
-  isSpeaking = true;
-  setStatus('Respondiendo...', true);
-
+  if (!('speechSynthesis' in window)) return;
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = 'es-ES';
-
-  utter.onend = () => {
-    isSpeaking = false;
-    setStatus(listening ? 'Esperando "hola ayudante"...' : 'Listo');
-  };
-
-  utter.onerror = () => {
-    isSpeaking = false;
-    setStatus(listening ? 'Esperando "hola ayudante"...' : 'Listo');
-  };
-
   speechSynthesis.speak(utter);
 }
 
