@@ -165,10 +165,10 @@
 
     <div class="log" id="logBox"></div>
   </div>
-<script>
+  <script>
 const WAKE_WORD = "hola ayudante";
-const COMMAND_TIMEOUT_MS = 12000;  // tiempo máximo total esperando que empieces a hablar
-const SILENCE_MS = 1800;           // pausa que indica que terminaste de decir el comando
+const COMMAND_TIMEOUT_MS = 12000;
+const SILENCE_MS = 1800;
 
 const orb = document.getElementById('orb');
 const statusEl = document.getElementById('status');
@@ -184,12 +184,13 @@ let recognition = null;
 let listening = false;
 let isSpeaking = false;
 let isProcessing = false;
-let awaitingFreshSession = false; // true entre un stop() pedido por nosotros y el próximo onstart real
+let awaitingFreshSession = false;
 
 let mode = 'wake'; // 'wake' | 'command'
-let commandTimer = null;   // timeout total esperando que arranques a hablar
-let silenceTimer = null;   // timeout de silencio para saber que terminaste la frase
-let commandBuffer = '';    // acumula los fragmentos de voz del comando
+let commandTimer = null;
+let silenceTimer = null;
+let commandBuffer = '';
+let lastLoggedText = ''; // evita loguear el mismo texto repetido en cada evento
 
 function log(msg) {
   const t = new Date().toLocaleTimeString();
@@ -199,6 +200,19 @@ function log(msg) {
 function setStatus(text, hot = false) {
   statusEl.textContent = text;
   statusEl.className = 'status' + (hot ? ' hot' : '');
+}
+
+// Reconstruye el transcript final COMPLETO de la sesión actual,
+// ignorando resultIndex (poco fiable en algunos Android) y
+// recorriendo siempre desde el principio de event.results.
+function getFullFinalTranscript(event) {
+  let combined = '';
+  for (let i = 0; i < event.results.length; i++) {
+    if (event.results[i].isFinal) {
+      combined += event.results[i][0].transcript;
+    }
+  }
+  return combined.trim();
 }
 
 const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -214,24 +228,23 @@ if (!SpeechRecognitionAPI) {
 
   recognition.onstart = () => {
     awaitingFreshSession = false;
+    lastLoggedText = '';
     log('Sesión de reconocimiento (re)iniciada.');
   };
 
   recognition.onresult = (event) => {
     if (isSpeaking || isProcessing || awaitingFreshSession) return;
 
-    let finalText = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      if (event.results[i].isFinal) {
-        finalText += event.results[i][0].transcript;
-      }
+    const fullText = getFullFinalTranscript(event);
+    if (!fullText || fullText.length < 2) return;
+
+    const normalized = fullText.toLowerCase();
+
+    // Solo logueamos cuando el texto realmente cambió, para no inundar el log
+    if (normalized !== lastLoggedText) {
+      log(`Escuchado: "${normalized}"`);
+      lastLoggedText = normalized;
     }
-    if (!finalText) return;
-
-    const normalized = finalText.toLowerCase().trim();
-    if (normalized.length < 2) return;
-
-    log(`Escuchado: "${normalized}"`);
 
     if (mode === 'wake') {
       if (normalized.includes(WAKE_WORD)) {
@@ -240,14 +253,14 @@ if (!SpeechRecognitionAPI) {
 
         if (rest.length > 3) {
           enterCommandMode();
-          appendToCommand(rest);
+          setCommandText(rest);
         } else {
           enterCommandMode();
         }
       }
     } else if (mode === 'command') {
       clearTimeout(commandTimer);
-      appendToCommand(normalized);
+      setCommandText(normalized);
     }
   };
 
@@ -267,16 +280,16 @@ if (!SpeechRecognitionAPI) {
 }
 
 function enterCommandMode() {
-  if (mode === 'command') return; // ya estamos en modo comando, no reiniciar de nuevo
+  if (mode === 'command') return;
   mode = 'command';
   commandBuffer = '';
-  awaitingFreshSession = true; // ignorar resultados hasta que el reinicio sea real (onstart)
+  awaitingFreshSession = true;
   orb.classList.add('active');
   setStatus('Te escucho...', true);
   log('Wake word detectada. Reiniciando escucha para captar el comando.');
 
   if (recognition) {
-    recognition.stop(); // onend reiniciará; onstart limpiará awaitingFreshSession
+    recognition.stop();
   }
 
   clearTimeout(commandTimer);
@@ -286,12 +299,11 @@ function enterCommandMode() {
   }, COMMAND_TIMEOUT_MS);
 }
 
-function appendToCommand(text) {
-  commandBuffer = (commandBuffer + ' ' + text).trim();
+// Reemplaza el buffer con el texto actual (no lo va sumando)
+function setCommandText(text) {
+  commandBuffer = text.trim();
   setStatus('Escuchando: "' + commandBuffer + '"', true);
 
-  // Cada fragmento nuevo reinicia el temporizador de silencio.
-  // Solo enviamos el comando completo cuando pasa SILENCE_MS sin nada nuevo.
   clearTimeout(silenceTimer);
   silenceTimer = setTimeout(() => {
     if (commandBuffer) {
@@ -303,6 +315,7 @@ function appendToCommand(text) {
 function resetToWake() {
   mode = 'wake';
   commandBuffer = '';
+  lastLoggedText = '';
   clearTimeout(silenceTimer);
   orb.classList.remove('active');
   if (!isSpeaking && !isProcessing) {
@@ -418,6 +431,7 @@ function startListening() {
   listening = true;
   mode = 'wake';
   commandBuffer = '';
+  lastLoggedText = '';
   awaitingFreshSession = false;
   recognition.start();
   orb.classList.add('listening');
@@ -431,6 +445,7 @@ function stopListening() {
   listening = false;
   mode = 'wake';
   commandBuffer = '';
+  lastLoggedText = '';
   awaitingFreshSession = false;
   clearTimeout(commandTimer);
   clearTimeout(silenceTimer);
@@ -454,6 +469,5 @@ testBtn.addEventListener('click', () => {
   if (texto) handleCommand(texto.toLowerCase());
 });
 </script>
-  
 </body>
 </html>
