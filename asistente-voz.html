@@ -89,6 +89,10 @@
     border-color: var(--ok);
     background: radial-gradient(circle at 35% 30%, #1a3a2a, #10131a);
   }
+  .orb.speaking {
+    border-color: var(--accent);
+    background: radial-gradient(circle at 35% 30%, #3a2a1a, #10131a);
+  }
   @keyframes pulse {
     0% { box-shadow: 0 0 0 0 rgba(255,69,58,0.45); }
     70% { box-shadow: 0 0 0 22px rgba(255,69,58,0); }
@@ -210,6 +214,8 @@ let recognition = null;
 let listening = false;
 let awake = false;
 let awakeTimer = null;
+let isSpeaking = false;   // true mientras el asistente está reproduciendo audio
+let isProcessing = false; // true mientras hay una solicitud al webhook en curso
 
 function log(msg) {
   const t = new Date().toLocaleTimeString();
@@ -233,6 +239,9 @@ if (!SpeechRecognitionAPI) {
   recognition.interimResults = true;
 
   recognition.onresult = (event) => {
+    // Ignorar cualquier resultado mientras el asistente habla o procesa un comando
+    if (isSpeaking || isProcessing) return;
+
     let finalText = '';
     for (let i = event.resultIndex; i < event.results.length; i++) {
       if (event.results[i].isFinal) {
@@ -242,6 +251,8 @@ if (!SpeechRecognitionAPI) {
     if (!finalText) return;
 
     const normalized = finalText.toLowerCase().trim();
+    if (normalized.length < 3) return; // descarta ruido/ecos muy cortos
+
     log(`Escuchado: "${normalized}"`);
 
     if (!awake) {
@@ -275,8 +286,8 @@ if (!SpeechRecognitionAPI) {
   };
 
   recognition.onend = () => {
-    if (listening) {
-      // Reinicia automáticamente (el navegador corta la sesión periódicamente)
+    // Solo reinicia si seguimos "escuchando" y no estamos hablando ni procesando
+    if (listening && !isSpeaking && !isProcessing) {
       recognition.start();
     }
   };
@@ -285,15 +296,28 @@ if (!SpeechRecognitionAPI) {
 function resetAwake() {
   awake = false;
   orb.classList.remove('active');
-  setStatus(listening ? 'Esperando "hola ayudante"...' : 'Detenido');
+  if (!isSpeaking && !isProcessing) {
+    setStatus(listening ? 'Esperando "hola ayudante"...' : 'Detenido');
+  }
 }
 
 function handleCommand(text) {
+  if (isProcessing) return; // evita doble envío si llega otro resultado en el medio
+  isProcessing = true;
+
   setStatus('Procesando...', true);
   youText.textContent = text;
   replyText.textContent = '';
-  sendToWebhook(text);
-  resetAwake();
+
+  // Pausamos el reconocimiento mientras se procesa/responde
+  if (recognition && listening) {
+    recognition.stop();
+  }
+
+  sendToWebhook(text).finally(() => {
+    isProcessing = false;
+    resetAwake();
+  });
 }
 
 async function sendToWebhook(comando) {
@@ -316,19 +340,51 @@ async function sendToWebhook(comando) {
 
     const spoken = data.respuesta || data.texto || data.output || JSON.stringify(data);
     replyText.textContent = spoken;
-    speak(spoken);
-    setStatus(listening ? 'Esperando "hola ayudante"...' : 'Listo');
+    speak(spoken); // esto reactiva el reconocimiento al terminar de hablar
   } catch (err) {
     log('Error al llamar al webhook: ' + err.message);
     setStatus('Error al conectar con n8n');
     replyText.textContent = '⚠️ ' + err.message;
+    // Si falla el webhook, igual hay que reactivar el micrófono
+    if (listening && recognition) {
+      recognition.start();
+    }
   }
 }
 
 function speak(text) {
-  if (!('speechSynthesis' in window)) return;
+  if (!('speechSynthesis' in window)) {
+    // Sin TTS disponible, reactivamos el micrófono directamente
+    if (listening && recognition) recognition.start();
+    setStatus(listening ? 'Esperando "hola ayudante"...' : 'Listo');
+    return;
+  }
+
+  isSpeaking = true;
+  orb.classList.add('speaking');
+  setStatus('Respondiendo...', true);
+
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = 'es-ES';
+
+  utter.onend = () => {
+    isSpeaking = false;
+    orb.classList.remove('speaking');
+    if (listening && recognition) {
+      recognition.start(); // recién acá se reactiva la escucha
+    }
+    setStatus(listening ? 'Esperando "hola ayudante"...' : 'Listo');
+  };
+
+  utter.onerror = () => {
+    // Por seguridad, si el TTS falla igual reactivamos el micrófono
+    isSpeaking = false;
+    orb.classList.remove('speaking');
+    if (listening && recognition) {
+      recognition.start();
+    }
+  };
+
   speechSynthesis.speak(utter);
 }
 
@@ -346,7 +402,7 @@ function stopListening() {
   if (!recognition) return;
   listening = false;
   recognition.stop();
-  orb.classList.remove('listening', 'active');
+  orb.classList.remove('listening', 'active', 'speaking');
   setStatus('Detenido');
   toggleBtn.textContent = 'Activar escucha';
   log('Escucha detenida.');
