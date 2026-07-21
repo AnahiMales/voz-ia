@@ -165,7 +165,6 @@
 
     <div class="log" id="logBox"></div>
   </div>
-
 <script>
 const WAKE_WORD = "hola ayudante";
 const COMMAND_TIMEOUT_MS = 12000;  // tiempo máximo total esperando que empieces a hablar
@@ -185,6 +184,7 @@ let recognition = null;
 let listening = false;
 let isSpeaking = false;
 let isProcessing = false;
+let awaitingFreshSession = false; // true entre un stop() pedido por nosotros y el próximo onstart real
 
 let mode = 'wake'; // 'wake' | 'command'
 let commandTimer = null;   // timeout total esperando que arranques a hablar
@@ -212,8 +212,13 @@ if (!SpeechRecognitionAPI) {
   recognition.continuous = true;
   recognition.interimResults = true;
 
+  recognition.onstart = () => {
+    awaitingFreshSession = false;
+    log('Sesión de reconocimiento (re)iniciada.');
+  };
+
   recognition.onresult = (event) => {
-    if (isSpeaking || isProcessing) return;
+    if (isSpeaking || isProcessing || awaitingFreshSession) return;
 
     let finalText = '';
     for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -265,12 +270,13 @@ function enterCommandMode() {
   if (mode === 'command') return; // ya estamos en modo comando, no reiniciar de nuevo
   mode = 'command';
   commandBuffer = '';
+  awaitingFreshSession = true; // ignorar resultados hasta que el reinicio sea real (onstart)
   orb.classList.add('active');
   setStatus('Te escucho...', true);
   log('Wake word detectada. Reiniciando escucha para captar el comando.');
 
   if (recognition) {
-    recognition.stop(); // onend reinicia con buffer limpio
+    recognition.stop(); // onend reiniciará; onstart limpiará awaitingFreshSession
   }
 
   clearTimeout(commandTimer);
@@ -284,7 +290,7 @@ function appendToCommand(text) {
   commandBuffer = (commandBuffer + ' ' + text).trim();
   setStatus('Escuchando: "' + commandBuffer + '"', true);
 
-  // Cada vez que llega un fragmento nuevo, reiniciamos el temporizador de silencio.
+  // Cada fragmento nuevo reinicia el temporizador de silencio.
   // Solo enviamos el comando completo cuando pasa SILENCE_MS sin nada nuevo.
   clearTimeout(silenceTimer);
   silenceTimer = setTimeout(() => {
@@ -310,6 +316,7 @@ function handleCommand(text) {
   clearTimeout(commandTimer);
   clearTimeout(silenceTimer);
   commandBuffer = '';
+  awaitingFreshSession = true;
 
   setStatus('Procesando...', true);
   youText.textContent = text;
@@ -411,6 +418,7 @@ function startListening() {
   listening = true;
   mode = 'wake';
   commandBuffer = '';
+  awaitingFreshSession = false;
   recognition.start();
   orb.classList.add('listening');
   setStatus('Esperando "hola ayudante"...');
@@ -423,6 +431,7 @@ function stopListening() {
   listening = false;
   mode = 'wake';
   commandBuffer = '';
+  awaitingFreshSession = false;
   clearTimeout(commandTimer);
   clearTimeout(silenceTimer);
   recognition.stop();
@@ -445,5 +454,6 @@ testBtn.addEventListener('click', () => {
   if (texto) handleCommand(texto.toLowerCase());
 });
 </script>
+  
 </body>
 </html>
