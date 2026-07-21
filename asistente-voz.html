@@ -35,23 +35,9 @@
     border-radius: 16px;
     padding: 28px;
   }
-  h1 {
-    font-size: 18px;
-    margin: 0 0 4px;
-    font-weight: 600;
-  }
-  .sub {
-    color: var(--muted);
-    font-size: 13px;
-    margin-bottom: 22px;
-  }
-  label {
-    display: block;
-    font-size: 12px;
-    color: var(--muted);
-    margin-bottom: 6px;
-    margin-top: 16px;
-  }
+  h1 { font-size: 18px; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 22px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; margin-top: 16px; }
   input[type="text"] {
     width: 100%;
     background: #10131a;
@@ -62,12 +48,7 @@
     font-size: 13px;
     font-family: monospace;
   }
-  .orb-wrap {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    margin: 28px 0 18px;
-  }
+  .orb-wrap { display: flex; flex-direction: column; align-items: center; margin: 28px 0 18px; }
   .orb {
     width: 110px;
     height: 110px;
@@ -99,18 +80,9 @@
     100% { box-shadow: 0 0 0 0 rgba(255,69,58,0); }
   }
   .orb svg { width: 40px; height: 40px; }
-  .status {
-    text-align: center;
-    font-size: 13px;
-    color: var(--muted);
-    min-height: 18px;
-  }
+  .status { text-align: center; font-size: 13px; color: var(--muted); min-height: 18px; }
   .status.hot { color: var(--accent); font-weight: 600; }
-  .btn-row {
-    display: flex;
-    gap: 10px;
-    margin-top: 20px;
-  }
+  .btn-row { display: flex; gap: 10px; margin-top: 20px; }
   button {
     flex: 1;
     background: var(--accent);
@@ -122,11 +94,7 @@
     font-weight: 600;
     cursor: pointer;
   }
-  button.secondary {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text);
-  }
+  button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   .transcript-box {
     margin-top: 20px;
@@ -200,6 +168,8 @@
 
 <script>
 const WAKE_WORD = "hola ayudante";
+const COMMAND_TIMEOUT_MS = 10000; // tiempo máximo esperando el comando tras la wake word
+
 const orb = document.getElementById('orb');
 const statusEl = document.getElementById('status');
 const toggleBtn = document.getElementById('toggleBtn');
@@ -212,10 +182,13 @@ const webhookInput = document.getElementById('webhookUrl');
 
 let recognition = null;
 let listening = false;
-let awake = false;
-let awakeTimer = null;
-let isSpeaking = false;   // true mientras el asistente está reproduciendo audio
-let isProcessing = false; // true mientras hay una solicitud al webhook en curso
+let isSpeaking = false;
+let isProcessing = false;
+
+// mode: 'wake'    -> esperando la wake word
+//       'command' -> ya se detectó la wake word, esperando el comando en buffer limpio
+let mode = 'wake';
+let commandTimer = null;
 
 function log(msg) {
   const t = new Date().toLocaleTimeString();
@@ -239,7 +212,6 @@ if (!SpeechRecognitionAPI) {
   recognition.interimResults = true;
 
   recognition.onresult = (event) => {
-    // Ignorar cualquier resultado mientras el asistente habla o procesa un comando
     if (isSpeaking || isProcessing) return;
 
     let finalText = '';
@@ -251,28 +223,25 @@ if (!SpeechRecognitionAPI) {
     if (!finalText) return;
 
     const normalized = finalText.toLowerCase().trim();
-    if (normalized.length < 3) return; // descarta ruido/ecos muy cortos
+    if (normalized.length < 3) return;
 
     log(`Escuchado: "${normalized}"`);
 
-    if (!awake) {
+    if (mode === 'wake') {
       if (normalized.includes(WAKE_WORD)) {
-        awake = true;
-        orb.classList.add('active');
-        setStatus('Te escucho...', true);
-        log('Wake word detectada. Esperando comando.');
-        // Si ya viene el comando en la misma frase, úsalo directo
         const idx = normalized.indexOf(WAKE_WORD);
         const rest = normalized.slice(idx + WAKE_WORD.length).replace(/^[,\s]+/, '');
+
         if (rest.length > 3) {
+          // El comando vino en la misma frase, se procesa directo
           handleCommand(rest);
         } else {
-          clearTimeout(awakeTimer);
-          awakeTimer = setTimeout(() => resetAwake(), 8000);
+          // Solo se dijo la wake word: pasamos a modo comando con buffer limpio
+          enterCommandMode();
         }
       }
-    } else {
-      clearTimeout(awakeTimer);
+    } else if (mode === 'command') {
+      clearTimeout(commandTimer);
       handleCommand(normalized);
     }
   };
@@ -286,15 +255,33 @@ if (!SpeechRecognitionAPI) {
   };
 
   recognition.onend = () => {
-    // Solo reinicia si seguimos "escuchando" y no estamos hablando ni procesando
     if (listening && !isSpeaking && !isProcessing) {
       recognition.start();
     }
   };
 }
 
-function resetAwake() {
-  awake = false;
+function enterCommandMode() {
+  mode = 'command';
+  orb.classList.add('active');
+  setStatus('Te escucho...', true);
+  log('Wake word detectada. Reiniciando escucha para captar el comando.');
+
+  // Reinicio explícito: limpia el buffer de resultados para que lo próximo
+  // que se escuche se trate como el comando completo, sin residuos previos.
+  if (recognition) {
+    recognition.stop(); // onend reiniciará automáticamente (mode ya es 'command')
+  }
+
+  clearTimeout(commandTimer);
+  commandTimer = setTimeout(() => {
+    log('Tiempo de espera agotado, no se recibió comando.');
+    resetToWake();
+  }, COMMAND_TIMEOUT_MS);
+}
+
+function resetToWake() {
+  mode = 'wake';
   orb.classList.remove('active');
   if (!isSpeaking && !isProcessing) {
     setStatus(listening ? 'Esperando "hola ayudante"...' : 'Detenido');
@@ -302,21 +289,21 @@ function resetAwake() {
 }
 
 function handleCommand(text) {
-  if (isProcessing) return; // evita doble envío si llega otro resultado en el medio
+  if (isProcessing) return;
   isProcessing = true;
+  clearTimeout(commandTimer);
 
   setStatus('Procesando...', true);
   youText.textContent = text;
   replyText.textContent = '';
 
-  // Pausamos el reconocimiento mientras se procesa/responde
   if (recognition && listening) {
     recognition.stop();
   }
 
   sendToWebhook(text).finally(() => {
     isProcessing = false;
-    resetAwake();
+    resetToWake();
   });
 }
 
@@ -325,6 +312,7 @@ async function sendToWebhook(comando) {
   if (!url) {
     log('Falta la URL del webhook.');
     setStatus('Falta configurar la URL del webhook');
+    if (listening && recognition) recognition.start();
     return;
   }
   try {
@@ -334,18 +322,32 @@ async function sendToWebhook(comando) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ comando })
     });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
+
+    const raw = await res.text();
+    if (!res.ok) throw new Error('HTTP ' + res.status + (raw ? ': ' + raw : ''));
+
+    let data;
+    if (!raw || !raw.trim()) {
+      log('El webhook respondió sin contenido.');
+      data = {};
+    } else {
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        log('Respuesta no era JSON válido: ' + raw);
+        data = { respuesta: raw };
+      }
+    }
+
     log('Respuesta recibida: ' + JSON.stringify(data));
 
-    const spoken = data.respuesta || data.texto || data.output || JSON.stringify(data);
+    const spoken = data.respuesta || data.texto || data.output || 'No recibí una respuesta clara.';
     replyText.textContent = spoken;
-    speak(spoken); // esto reactiva el reconocimiento al terminar de hablar
+    speak(spoken);
   } catch (err) {
     log('Error al llamar al webhook: ' + err.message);
     setStatus('Error al conectar con n8n');
     replyText.textContent = '⚠️ ' + err.message;
-    // Si falla el webhook, igual hay que reactivar el micrófono
     if (listening && recognition) {
       recognition.start();
     }
@@ -354,7 +356,6 @@ async function sendToWebhook(comando) {
 
 function speak(text) {
   if (!('speechSynthesis' in window)) {
-    // Sin TTS disponible, reactivamos el micrófono directamente
     if (listening && recognition) recognition.start();
     setStatus(listening ? 'Esperando "hola ayudante"...' : 'Listo');
     return;
@@ -371,13 +372,12 @@ function speak(text) {
     isSpeaking = false;
     orb.classList.remove('speaking');
     if (listening && recognition) {
-      recognition.start(); // recién acá se reactiva la escucha
+      recognition.start();
     }
     setStatus(listening ? 'Esperando "hola ayudante"...' : 'Listo');
   };
 
   utter.onerror = () => {
-    // Por seguridad, si el TTS falla igual reactivamos el micrófono
     isSpeaking = false;
     orb.classList.remove('speaking');
     if (listening && recognition) {
@@ -391,6 +391,7 @@ function speak(text) {
 function startListening() {
   if (!recognition) return;
   listening = true;
+  mode = 'wake';
   recognition.start();
   orb.classList.add('listening');
   setStatus('Esperando "hola ayudante"...');
@@ -401,6 +402,8 @@ function startListening() {
 function stopListening() {
   if (!recognition) return;
   listening = false;
+  mode = 'wake';
+  clearTimeout(commandTimer);
   recognition.stop();
   orb.classList.remove('listening', 'active', 'speaking');
   setStatus('Detenido');
